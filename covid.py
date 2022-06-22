@@ -5,7 +5,7 @@ import os
 
 class CovidData:
 
-    def __init__(self) -> None:
+    def __init__(self):
         self.num_states = 3
         self.num_businesses_per_town = 3
         self.num_towns_per_state = 3
