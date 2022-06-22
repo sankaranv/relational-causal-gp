@@ -1,0 +1,26 @@
+{
+    "entities": {
+        "state": [
+            "policy"
+        ],
+        "town": [
+            "policy",
+            "prevalence"
+        ],
+        "business": [
+            "occupancy"
+        ]
+    },
+    "relations": {
+        "contains": {
+            "type": "many_to_one",
+            "from": "state",
+            "to": "town"
+        },
+        "resides": {
+            "type": "many_to_one",
+            "from": "town",
+            "to": "business"
+        }
+    }
+}

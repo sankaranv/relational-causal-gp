@@ -1,0 +1,58 @@
+{
+    "contains": [
+        {
+            "from": [
+                "state",
+                "policy"
+            ],
+            "to": [
+                "town",
+                "policy"
+            ]
+        },
+        {
+            "from": [
+                "state",
+                "policy"
+            ],
+            "to": [
+                "town",
+                "prevalence"
+            ]
+        }
+    ],
+    "resides": [
+        {
+            "from": [
+                "town",
+                "policy"
+            ],
+            "to": [
+                "business",
+                "occupancy"
+            ]
+        },
+        {
+            "from": [
+                "business",
+                "occupancy"
+            ],
+            "to": [
+                "town",
+                "prevalence"
+            ]
+        }
+    ],
+    "self": [
+        {
+            "from": [
+                "town",
+                "policy"
+            ],
+            "to": [
+                "town",
+                "prevalence"
+            ]
+        }
+    ]
+}
