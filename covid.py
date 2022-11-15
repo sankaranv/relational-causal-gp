@@ -10,6 +10,7 @@ class CovidData:
         self.num_businesses_per_town = 3
         self.num_towns_per_state = 3
 
+        self.reset()
         self.define_schema()
         self.define_causal_structure()
 
