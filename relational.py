@@ -3,11 +3,11 @@ from collections import namedtuple
 import torch
 import numpy as np
 import pandas as pd
+import networkx as nx
 
 RelationalNode = namedtuple('RelationalNode', 'entity attribute')
-InstanceNode = namedtuple('InstanceNode', 'entity attribute instance')
 CausalEdge = namedtuple('CausalEdge', 'parent child')
-RelationalEdge = namedtuple('RelationalEdge', 'parent child')
+InstanceNode = namedtuple('InstanceNode', 'entity attribute instance')
 
 class RelationalSchema:
     '''
@@ -31,7 +31,7 @@ class RelationalSchema:
         self.cardinality = schema_dict["cardinality"]
         self.relations = schema_dict["relations"]
         for relation in self.relations:
-            self.relations[relation] = RelationalEdge(*self.relations[relation])
+            self.relations[relation] = tuple(self.relations[relation])
         if not self.is_valid_schema():
             print("Schema is invalid, could not load from file")
             self.empty_schema()
@@ -80,21 +80,25 @@ class RelationalSkeleton:
                 self.entity_instances[entity][attribute] = []
         for relation in schema.relationship_classes:
             self.relationship_instances[relation] = []
-        self.all_instance_names = set()
+        self.instance_type = {}
+
+    def get_instance_type(self, instance):
+        return self.instance_type[instance]
 
     def load_from_file(self, schema, path_to_json):
         with open(path_to_json, 'r') as f:
             skeleton_dict = json.load(f)
         self.entity_instances = skeleton_dict["entity_instances"]
         for entity in self.entity_instances:
-            self.entity_instances[entity] = self.entity_instances[entity]
+            # Save entity types for all entities
+            for name in self.entity_instances[entity]["names"]:
+                self.instance_type[name] = entity
         self.relationship_instances = skeleton_dict["relationship_instances"]
         for relation in self.relationship_instances:
-            self.relationship_instances[relation] = [CausalEdge(*e) for e in self.relationship_instances[relation]]
+            self.relationship_instances[relation] = [tuple(e) for e in self.relationship_instances[relation]]
         if not self.is_valid_skeleton(schema):
             print("Skeleton is invalid for the given schema, could not load from file")
             self.empty_skeleton(schema)
-        self.all_instance_names = set().union(*[self.entity_instances[e]["names"] for e in self.entity_instances]) 
 
     def save_to_file(self, schema, path_to_json):
         if self.is_valid_skeleton(schema):
@@ -125,13 +129,13 @@ class RelationalSkeleton:
                 if len(self.entity_instances[entity][attribute]) != len(self.entity_instances[entity]["names"]):
                     print(f"Number of values of {entity}.{attribute} are not equal to the number of instance names")
                     return False
-        self.all_instance_names = set().union(*[self.entity_instances[e]["names"] for e in self.entity_instances]) 
+        all_instance_names = self.instance_type.keys()
         for relation in schema.relationship_classes:
             if relation not in self.relationship_instances or not isinstance(self.relationship_instances[relation], list):
                return False
             else:
                 for item in self.relationship_instances[relation]:
-                    if not isinstance(item, CausalEdge) or item[0] not in self.all_instance_names or item[1] not in self.all_instance_names:
+                    if not isinstance(item, tuple) or item[0] not in all_instance_names or item[1] not in all_instance_names:
                         return False
         return True
 
@@ -196,32 +200,101 @@ def create_adj_mat_dict(structure: RelationalCausalStructure, skeleton: Relation
     '''
     adj_mat_dict = {}
     for relation_name, entity_edge in structure.schema.relations.items():
-        num_entity1 = len(skeleton.entity_instances[entity_edge.parent]["names"])
-        num_entity2 = len(skeleton.entity_instances[entity_edge.child]["names"])
+        num_entity1 = len(skeleton.entity_instances[entity_edge[0]]["names"])
+        num_entity2 = len(skeleton.entity_instances[entity_edge[1]]["names"])
         adj_mat = pd.DataFrame([[False] * num_entity2] * num_entity1)
-        adj_mat.index = skeleton.entity_instances[entity_edge.parent]["names"]
-        adj_mat.columns = skeleton.entity_instances[entity_edge.child]["names"]
+        adj_mat.index = skeleton.entity_instances[entity_edge[0]]["names"]
+        adj_mat.columns = skeleton.entity_instances[entity_edge[1]]["names"]
         for instance_edge in skeleton.relationship_instances[relation_name]:
-            adj_mat.loc[instance_edge.parent, instance_edge.child] = True
+            adj_mat.loc[instance_edge[0], instance_edge[1]] = True
         adj_mat_dict[relation_name] = adj_mat
     return adj_mat_dict
 
+# Naming convention for nodes in ground graph is instance.attribute
+def get_name(instance, attribute):
+    return '.'.join([instance, attribute])
+
 def create_ground_graph(structure: RelationalCausalStructure, skeleton: RelationalSkeleton) -> dict:
     '''
-    
+    Creates an abstract ground graph
     '''
-    pass
+
+    # Set up nodes in ground graph and save attribute values in each node
+    # There will be one node for each (entity instance, attribute name) pair
+    ground_graph = nx.DiGraph()
+    for entity in skeleton.entity_instances:
+        attributes = structure.schema.attribute_classes[entity]  
+        for idx, instance_name in enumerate(skeleton.entity_instances[entity]["names"]):
+            for attribute_name in attributes:
+                node_name = get_name(instance_name,attribute_name)
+                attribute_value = skeleton.entity_instances[entity][attribute_name][idx]
+                ground_graph.add_node(node_name, val = attribute_value)
+
+    # Set up self edges
+    if "self" in structure.edges:
+        edge_list = structure.edges["self"]
+        for self_edge in edge_list:
+            if self_edge.parent.entity != self_edge.child.entity:
+                print("Edge is marked as a self-edge in skeleton but is between different entities")
+                break
+            else:
+                for instance_name in skeleton.entity_instances[self_edge.parent.entity]["names"]:
+                   parent_node_name = get_name(instance_name,self_edge.parent.attribute)
+                   child_node_name = get_name(instance_name,self_edge.child.attribute)
+                   ground_graph.add_edge(parent_node_name, child_node_name) 
+
+    # Set up all other edges
+    for relation_type, edge_list in skeleton.relationship_instances.items():
+        for instance_edge in edge_list:
+            # Add all edges in ground graph corresponding to each edge in the relational skeleton
+            entity_0 = skeleton.get_instance_type(instance_edge[0])
+            entity_1 = skeleton.get_instance_type(instance_edge[1])
+            # Add edges between entities
+            for relational_edge in structure.edges[relation_type]:
+                if relational_edge.parent.entity == entity_0 and relational_edge.child.entity == entity_1:
+                    parent_node_name = get_name(instance_edge[0],relational_edge.parent.attribute)
+                    child_node_name = get_name(instance_edge[1],relational_edge.child.attribute)
+                    ground_graph.add_edge(parent_node_name, child_node_name)
+                # Don't forget to consider the opposite direction, relational edges are not necessarily directed
+                if relational_edge.parent.entity == entity_1 and relational_edge.child.entity == entity_0:
+                    parent_node_name = get_name(instance_edge[1],relational_edge.parent.attribute)
+                    child_node_name = get_name(instance_edge[0],relational_edge.child.attribute)
+                    ground_graph.add_edge(parent_node_name, child_node_name)
+
+    return ground_graph
+
+def create_subgraph_for_ITE(ground_graph: nx.DiGraph, treatment: InstanceNode, outcome: InstanceNode, cutoff = 10):
+    source = get_name(treatment.instance, treatment.attribute)
+    target = get_name(outcome.instance, outcome.attribute)
+    subgraph = nx.DiGraph()
+    if nx.has_path(ground_graph, source, target):
+        for path in nx.all_simple_edge_paths(ground_graph, source, target, cutoff):
+            for edge in path:
+                subgraph.add_edge(*edge)
+    else:
+        print(f"No directed path from {source} to {target}")
+    return subgraph
 
 if __name__ == "__main__":
+
+    # Create relational schema
     schema = RelationalSchema()
     schema.load_from_file('example/covid_schema.json')
+
+    # Create relational skeleton
     skeleton = RelationalSkeleton(schema)
     skeleton.load_from_file(schema, 'example/covid_skeleton.json')
-    print(skeleton.entity_instances)
+
+    # Create relational structure
     structure = RelationalCausalStructure(schema)
     structure.load_edges_from_file('example/covid_structure.json')
-    incoming_edges = structure.get_incoming_edges()
-    # scm = RelationalSCM(structure)
+
+    # Create adjacency matrices and ground graph
     adj_mat_dict = create_adj_mat_dict(structure, skeleton)
-    print(adj_mat_dict['contains'])
-    print(adj_mat_dict['resides'])
+    ground_graph = create_ground_graph(structure, skeleton)
+
+    # Get subgraphs
+    treatment = InstanceNode("state", "policy", "s1")
+    outcome = InstanceNode("town", "prevalence", "t2")
+    subgraph = create_subgraph_for_ITE(ground_graph, treatment, outcome)
+    print(subgraph.edges)
