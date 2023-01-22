@@ -1,0 +1,10 @@
+{
+    "self": [
+        [["town", "policy"], ["town", "prevalence"]]],
+    "contains": [
+        [["state", "policy"], ["town", "policy"]],
+        [["state", "policy"], ["town", "prevalence"]]],
+    "resides": [
+        [["town", "policy"], ["business", "occupancy"]],
+        [["business", "occupancy"], ["town", "prevalence"]]]
+}

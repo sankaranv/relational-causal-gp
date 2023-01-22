@@ -1,0 +1,7 @@
+{
+    "entity_classes": ["town", "business", "state"], 
+    "relationship_classes": ["contains", "resides"],
+    "attribute_classes": {"state": ["policy"], "town": ["prevalence", "policy"], "business": ["occupancy"]}, 
+    "cardinality": {"contains": {"state": "one", "town": "many"}, "resides": {"town": "one", "business": "many"}},
+    "relations": {"contains": ["state", "town"], "resides": ["town", "business"]}
+}
