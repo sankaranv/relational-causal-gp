@@ -7,7 +7,7 @@ from relational import *
 def causal_estimand(y, y_t):
     pass
 
-def gaussian_process_effect_estimation(scm: RelationalCausalModel, num_samples: int, input_data: dict, intervention: dict) -> float:
+def gaussian_process_effect_estimation(scm: RelationalSCM, num_samples: int, input_data: dict, intervention: dict) -> float:
     
     """Obtain samples from the posterior over causal effects
 

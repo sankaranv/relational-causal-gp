@@ -5,14 +5,15 @@ import numpy as np
 import pandas as pd
 import networkx as nx
 
-RelationalNode = namedtuple('RelationalNode', 'entity attribute')
 CausalEdge = namedtuple('CausalEdge', 'parent child')
+RelationalNode = namedtuple('RelationalNode', 'entity attribute')
 InstanceNode = namedtuple('InstanceNode', 'entity attribute instance')
 
 class RelationalSchema:
-    '''
+    """
     Relational Schema
-    '''
+    """
+
     def __init__(self) -> None:
         self.empty_schema()
 
@@ -20,8 +21,9 @@ class RelationalSchema:
         self.entity_classes = [] # each entry is a name
         self.relationship_classes = [] # each entry is a dict with keys left and right
         self.attribute_classes = {} # each key is an entity/relationship class and each value is a set of attribute names
-        self.cardinality = {} # each key is a (relationship class, entity class) tuple and value is 'one' or 'many'
+        self.cardinality = {} # each key is [relationship class][entity class] and value is 'one' or 'many'
         self.relations = {} # each key is a relationship class and value is an (entity class, entity class) tuple
+    
     def load_from_file(self, path_to_json):
         with open(path_to_json, 'r') as f:
             schema_dict = json.load(f)
@@ -65,9 +67,9 @@ class RelationalSchema:
 
 
 class RelationalSkeleton:
-    '''
+    """
     Relational Skeleton
-    '''
+    """
     def __init__(self, schema) -> None:
         self.empty_skeleton(schema)
 
@@ -139,15 +141,29 @@ class RelationalSkeleton:
                         return False
         return True
 
+    def get_attribute_vector(self, entity: str, attribute: str) -> torch.Tensor:
+        """ Obtain list of instances of given attribute in given entity
+
+        Args:
+            entity (str): entity name
+            attribute (str): attribute name
+
+        Returns:
+            torch.Tensor: list of all instances of given attribute in the given entity
+        """
+        attribute_instances = self.entity_instances[entity][attribute]
+        return torch.Tensor(attribute_instances)
+
 class RelationalCausalStructure:
-    '''
+    """
     Relational Causal Structure
-    '''
+    """
     def __init__(self, schema, edges = None) -> None:
         self.schema = schema
         self.edges = {} if edges is None else edges
         self.nodes = set()
         self.parents = {}
+        self.incoming_edges = self.create_incoming_edges_dict()
 
     def load_edges_from_file(self, path_to_json):
         with open(path_to_json, 'r') as f:
@@ -173,7 +189,8 @@ class RelationalCausalStructure:
         with open(path_to_json, 'w') as f:
             json.dump(self.edges, f)
 
-    def get_incoming_edges(self):
+    def create_incoming_edges_dict(self):
+        # Key is [entity_name][attribute_name] and value is a list of (relation, edge) tuples
         incoming_edges = {}
         for entity, attributes in self.schema.attribute_classes.items():
             attribute_dict = {}
@@ -184,9 +201,15 @@ class RelationalCausalStructure:
         for relation, edge_list in self.edges.items():
             for edge in edge_list:
                 incoming_edges[edge.child.entity][edge.child.attribute].append((relation, edge))
-        return incoming_edges        
+        return incoming_edges
+
+    def get_incoming_edges(self, entity_name, attribute_name):
+        return self.incoming_edges[entity_name][attribute_name]   
 
 class RelationalSCM:
+    """
+    Relational SCM
+    """
     def __init__(self, structure: RelationalCausalStructure) -> None:
         self.structure = structure
         self.functions = {}
@@ -195,9 +218,16 @@ class RelationalSCM:
 
 
 def create_adj_mat_dict(structure: RelationalCausalStructure, skeleton: RelationalSkeleton) -> dict:
-    '''
-    Creates adjacency matrices based on the relational skeleton
-    '''
+    """ Creates adjacency matrices based on the relational skeleton
+
+    Args:
+        structure (RelationalCausalStructure): 
+        skeleton (RelationalSkeleton): 
+
+    Returns:
+        dict: contains an adjacency matrix (pd.DataFrame) for each relationship class
+    """
+    
     adj_mat_dict = {}
     for relation_name, entity_edge in structure.schema.relations.items():
         num_entity1 = len(skeleton.entity_instances[entity_edge[0]]["names"])
@@ -210,15 +240,29 @@ def create_adj_mat_dict(structure: RelationalCausalStructure, skeleton: Relation
         adj_mat_dict[relation_name] = adj_mat
     return adj_mat_dict
 
-# Naming convention for nodes in ground graph is instance.attribute
-def get_name(instance, attribute):
+def get_node_name(instance: str, attribute: str) -> str:
+    """ Returns node name for building ground graphs instance.attribute
+        Naming convention is instance.attribute 
+
+    Args:
+        instance (str): instance name
+        attribute (str): attribute name
+
+    Returns:
+        str: node name
+    """
     return '.'.join([instance, attribute])
 
-def create_ground_graph(structure: RelationalCausalStructure, skeleton: RelationalSkeleton) -> dict:
-    '''
-    Creates an abstract ground graph
-    '''
+def create_ground_graph(structure: RelationalCausalStructure, skeleton: RelationalSkeleton) -> nx.DiGraph:
+    """ Creates an abstract ground graph for the given relational dataset
 
+    Args:
+        structure (RelationalCausalStructure): contains schema and edges
+        skeleton (RelationalSkeleton): contains all instances
+
+    Returns:
+        nx.DiGraph: the abstract ground graph
+    """
     # Set up nodes in ground graph and save attribute values in each node
     # There will be one node for each (entity instance, attribute name) pair
     ground_graph = nx.DiGraph()
@@ -226,7 +270,7 @@ def create_ground_graph(structure: RelationalCausalStructure, skeleton: Relation
         attributes = structure.schema.attribute_classes[entity]  
         for idx, instance_name in enumerate(skeleton.entity_instances[entity]["names"]):
             for attribute_name in attributes:
-                node_name = get_name(instance_name,attribute_name)
+                node_name = get_node_name(instance_name,attribute_name)
                 attribute_value = skeleton.entity_instances[entity][attribute_name][idx]
                 ground_graph.add_node(node_name, val = attribute_value)
 
@@ -239,8 +283,8 @@ def create_ground_graph(structure: RelationalCausalStructure, skeleton: Relation
                 break
             else:
                 for instance_name in skeleton.entity_instances[self_edge.parent.entity]["names"]:
-                   parent_node_name = get_name(instance_name,self_edge.parent.attribute)
-                   child_node_name = get_name(instance_name,self_edge.child.attribute)
+                   parent_node_name = get_node_name(instance_name,self_edge.parent.attribute)
+                   child_node_name = get_node_name(instance_name,self_edge.child.attribute)
                    ground_graph.add_edge(parent_node_name, child_node_name) 
 
     # Set up all other edges
@@ -252,20 +296,31 @@ def create_ground_graph(structure: RelationalCausalStructure, skeleton: Relation
             # Add edges between entities
             for relational_edge in structure.edges[relation_type]:
                 if relational_edge.parent.entity == entity_0 and relational_edge.child.entity == entity_1:
-                    parent_node_name = get_name(instance_edge[0],relational_edge.parent.attribute)
-                    child_node_name = get_name(instance_edge[1],relational_edge.child.attribute)
+                    parent_node_name = get_node_name(instance_edge[0],relational_edge.parent.attribute)
+                    child_node_name = get_node_name(instance_edge[1],relational_edge.child.attribute)
                     ground_graph.add_edge(parent_node_name, child_node_name)
                 # Don't forget to consider the opposite direction, relational edges are not necessarily directed
                 if relational_edge.parent.entity == entity_1 and relational_edge.child.entity == entity_0:
-                    parent_node_name = get_name(instance_edge[1],relational_edge.parent.attribute)
-                    child_node_name = get_name(instance_edge[0],relational_edge.child.attribute)
+                    parent_node_name = get_node_name(instance_edge[1],relational_edge.parent.attribute)
+                    child_node_name = get_node_name(instance_edge[0],relational_edge.child.attribute)
                     ground_graph.add_edge(parent_node_name, child_node_name)
 
     return ground_graph
 
-def create_subgraph_for_ITE(ground_graph: nx.DiGraph, treatment: InstanceNode, outcome: InstanceNode, cutoff = 10):
-    source = get_name(treatment.instance, treatment.attribute)
-    target = get_name(outcome.instance, outcome.attribute)
+def create_subgraph_for_ITE(ground_graph: nx.DiGraph, treatment: InstanceNode, outcome: InstanceNode, cutoff = 10) -> nx.DiGraph:
+    """ Obtain all nodes on the path between treatment and outcome in the abstract ground graph
+
+    Args:
+        ground_graph (nx.DiGraph): abstract ground graph
+        treatment (InstanceNode): an (entity, attribute, instance) tuple of strings
+        outcome (InstanceNode): an (entity, attribute, instance) tuple of strings
+        cutoff (int, optional): max length of paths considered. Defaults to 10.
+
+    Returns:
+        nx.DiGraph: a subgraph containing all nodes on paths between treatment and outcome
+    """
+    source = get_node_name(treatment.instance, treatment.attribute)
+    target = get_node_name(outcome.instance, outcome.attribute)
     subgraph = nx.DiGraph()
     if nx.has_path(ground_graph, source, target):
         for path in nx.all_simple_edge_paths(ground_graph, source, target, cutoff):
